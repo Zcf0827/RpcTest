@@ -6,16 +6,16 @@ import NettyTest.coder.NettyKryoDecoder;
 import NettyTest.coder.NettyKryoEncoder;
 import NettyTest.entity.RpcRequest;
 import NettyTest.entity.RpcResponse;
-import com.sun.org.slf4j.internal.Logger;
-import com.sun.org.slf4j.internal.LoggerFactory;
 import io.netty.bootstrap.Bootstrap;
-import io.netty.channel.ChannelInitializer;
-import io.netty.channel.ChannelOption;
+import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.logging.LogLevel;
 import io.netty.handler.logging.LoggingHandler;
+import io.netty.util.AttributeKey;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 1 定义传输对象实体
@@ -27,43 +27,81 @@ import io.netty.handler.logging.LoggingHandler;
 
 //发送消息 以及获取消息
 public class NettyClient {
-    private static  final Logger logger = LoggerFactory.getLogger(NettyClient.class);
+    private static final Logger logger = LoggerFactory.getLogger(NettyClient.class);
     private final String host;
-    private final int post;
+    private final int port;
     private static final Bootstrap b;
 
-    public NettyClient(String host, int post){
-        this.post = post;
+    public NettyClient(String host, int port) {
         this.host = host;
+        this.port = port;
     }
-    //初始化netty客户端
-    //客户端连接
-    //网络通信（读写）
-    //通道相关设置 超时连接 和心跳请求  通道处理读服务端消息
-    //绑定编码解吗
+
+    // 初始化相关资源比如 EventLoopGroup, Bootstrap
     static {
-        NioEventLoopGroup eventLoopGroup = new NioEventLoopGroup();
+        EventLoopGroup eventLoopGroup = new NioEventLoopGroup();
         b = new Bootstrap();
-        Serializer kryoSerializer = new KryoSerializer();
-        b.group(eventLoopGroup).channel(NioSocketChannel.class)
+        KryoSerializer kryoSerializer = new KryoSerializer();
+        b.group(eventLoopGroup)
+                .channel(NioSocketChannel.class)
                 .handler(new LoggingHandler(LogLevel.INFO))
+                // 连接的超时时间，超过这个时间还是建立不上的话则代表连接失败
+                //  如果 15 秒之内没有发送数据给服务端的话，就发送一次心跳请求
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
                 .handler(new ChannelInitializer<SocketChannel>() {
                     @Override
-                    protected void initChannel(SocketChannel socketChannel) throws Exception {
-
-                        socketChannel.pipeline().addLast(new NettyKryoDecoder(kryoSerializer, RpcResponse.class));
-                        socketChannel.pipeline().addLast(new NettyKryoEncoder(kryoSerializer, RpcRequest.class));
-                        socketChannel.pipeline().addLast(new NettyClientHandler());
-
-
+                    protected void initChannel(SocketChannel ch) {
+                        /*
+                         自定义序列化编解码器
+                         */
+                        // RpcResponse -> ByteBuf
+                        ch.pipeline().addLast(new NettyKryoDecoder(kryoSerializer, RpcResponse.class));
+                        // ByteBuf -> RpcRequest
+                        ch.pipeline().addLast(new NettyKryoEncoder(kryoSerializer, RpcRequest.class));
+                        ch.pipeline().addLast(new NettyClientHandler());
                     }
                 });
-
     }
-    //发送消息的方法
 
-    //处理消息的方法
+    /**
+     * 发送消息到服务端
+     *
+     * @param rpcRequest 消息体
+     * @return 服务端返回的数据
+     */
+    public RpcResponse sendMessage(RpcRequest rpcRequest) {
+        try {
+            ChannelFuture f = b.connect(host, port).sync();
+            logger.info("client connect  {}", host + ":" + port);
+            Channel futureChannel = f.channel();
+            logger.info("send message");
+            if (futureChannel != null) {
+                futureChannel.writeAndFlush(rpcRequest).addListener(future -> {
+                    if (future.isSuccess()) {
+                        logger.info("client send message: [{}]", rpcRequest.toString());
+                    } else {
+                        logger.error("Send failed:", future.cause());
+                    }
+                });
+                futureChannel.closeFuture().sync();
+                AttributeKey<RpcResponse> key = AttributeKey.valueOf("rpcResponse");
+                return futureChannel.attr(key).get();
+            }
+        } catch (InterruptedException e) {
+            logger.error("occur exception when connect server:", e);
+        }
+        return null;
+    }
 
-
+    public static void main(String[] args) {
+        RpcRequest rpcRequest = RpcRequest.builder()
+                .interfaceName("interface")
+                .methodName("hello").build();
+        NettyClient nettyClient = new NettyClient("127.0.0.1", 8889);
+        for (int i = 0; i < 3; i++) {
+            nettyClient.sendMessage(rpcRequest);
+        }
+        RpcResponse rpcResponse = nettyClient.sendMessage(rpcRequest);
+        System.out.println(rpcResponse.toString());
+    }
 }

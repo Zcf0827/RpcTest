@@ -12,4 +12,5 @@ import lombok.*;
 public class RpcRequest {
     private String interfaceName;
     private String methodName;
+
 }
