@@ -34,10 +34,10 @@ public class Server {
             String methodName = request.getMethondname();
 
             //从注册中心找接口名字
-            Class clazz = null;
+            //Class clazz = null;
 
-
-            clazz = IUserServiceImpl.class;
+            Class clazz = Class.forName(interfaceName + "Impl");
+            //clazz = IUserServiceImpl.class;
             Method method = clazz.getMethod(methodName, parametertype);
             UserDTO userDTO = (UserDTO) method.invoke(clazz.newInstance(), arg);
             //反序列化
